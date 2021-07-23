@@ -43,16 +43,18 @@ let validate_protocols_exn (ast : scr_module) : unit =
   in
   show ~f:show_global_protocol protocols ;
   let g_types =
-    List.map ~f:(fun p -> (Gtype.of_protocol p, p.Loc.value.roles)) protocols
+    List.map ~f:(fun p -> (Gtype.of_protocol p, p.Loc.value.roles, p.Loc.value.safe_roles)) protocols
   in
   (* let g_types = List.map ~f:(fun (g, roles) -> (Gtype.normalise g, roles))
      g_types in *)
-  show ~f:(fun (g, _) -> Gtype.show g) g_types ;
+  show ~f:(fun (g, _, _) -> Gtype.show g) g_types ;
+  if Pragma.error_handling_crash_branch () then
+    List.iter ~f:(fun (g, _, sroles) -> Gtype.validate_crashes_exn sroles g) g_types ;
   if Pragma.refinement_type_enabled () then
-    List.iter ~f:(fun (g, _) -> Gtype.validate_refinements_exn g) g_types ;
+    List.iter ~f:(fun (g, _, _) -> Gtype.validate_refinements_exn g) g_types ;
   let l_types =
     List.map
-      ~f:(fun (g, roles) ->
+      ~f:(fun (g, roles, _) ->
         List.map ~f:(fun r -> Ltype.project (RoleName.of_name r) g) roles )
       g_types
   in

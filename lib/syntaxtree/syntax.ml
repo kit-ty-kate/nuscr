@@ -13,6 +13,11 @@ module N = Name.Name
 
 type name = N.t [@@deriving show {with_path= false}, sexp_of]
 
+type sname =
+  | Safe of name
+  | Unsafe of name
+  [@@deriving show {with_path= false}, sexp_of]
+
 let equal_name = N.equal
 
 let compare_name = N.compare
@@ -150,6 +155,7 @@ and raw_global_protocol =
         (* parameters for the recursion *)
   ; roles: name list
   ; split_roles: name list * name list
+  ; safe_roles: sname list
   ; nested_protocols: global_protocol list
   ; interactions: global_interaction list
   ; ann: annotation option }

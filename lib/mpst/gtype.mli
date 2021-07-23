@@ -75,6 +75,10 @@ val normalise : t -> t
 val normalise_global_t : global_t -> global_t
 (** Apply normalisation to all protocols in global_t *)
 
+val validate_crashes_exn : Syntax.sname list -> t -> unit
+(** Ensure that all non-safe roles have crash branches, requires
+    [ErrorHandlingCrashBranch] pragma *)
+
 val validate_refinements_exn : t -> unit
 (** Validate refinements in the given global type, requires [RefinementTypes]
     pragma *)

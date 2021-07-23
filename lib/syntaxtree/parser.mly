@@ -58,7 +58,7 @@
 %token DO_KW
 %token CALLS_KW
 %token NEW_KW
-%token CRASH_KW
+%token SAFE_KW
 
 (* pragmas *)
 %token PRAGMA_START
@@ -149,16 +149,22 @@ let protocol_decl == global_protocol_decl (* local pending *)
 let global_protocol_decl == located(raw_global_protocol_decl)
 let raw_global_protocol_decl ==
   opts = protocol_options? ; protocol_hdr ; nm = name ;
-  pars = parameter_decls? ; rs = role_decls ; rp = rec_parameter_decls? ;
+  pars = parameter_decls? ; rs0 = role_decls ; rp = rec_parameter_decls? ;
   ann = annotation? ; body = global_protocol_body ;
   {
     let (nested_protos, ints) = body in
+    let strip = function
+      | Safe x -> x
+      | Unsafe x -> x
+    in
+    let rs = List.map strip rs0 in
     { name = nm
     ; options = opts
     ; parameters = (match pars with Some p -> p | _ -> [])
     ; rec_parameters = (match rp with Some p -> p | _ -> [])
     ; roles = rs
     ; split_roles = (rs, [])
+    ; safe_roles = rs0
     ; nested_protocols = nested_protos
     ; interactions = ints
     ; ann = ann
@@ -178,6 +184,7 @@ let raw_nested_protocol_decl ==
     ; rec_parameters = (match rp with Some p -> p | _ -> [])
     ; roles = (let (rs', rs'') = rs in rs' @ rs'')
     ; split_roles = rs
+    ; safe_roles = []
     ; nested_protocols = nested_protos
     ; interactions = ints
     ; ann = ann
@@ -214,14 +221,29 @@ let role_decls == LPAR ; nms = separated_nonempty_list(COMMA, role_decl) ;
                   RPAR ; { nms }
 
 
-let nested_role_decls == LPAR ; nms = separated_nonempty_list(COMMA, role_decl) ;
-                         new_nms = new_role_decls? ; RPAR ; { (nms, loalo new_nms) }
+let nested_role_decls == LPAR ; nms0 = separated_nonempty_list(COMMA, role_decl) ;
+                         new_nms = new_role_decls? ; RPAR ; {
+                           let strip = function
+                             | Safe x -> x
+                             | Unsafe x -> x
+                           in
+                           let nms = List.map strip nms0 in
+                           (nms, loalo new_nms) 
+                          }
 
-let role_decl == ROLE_KW ; nm = name ; { nm }
-
+let role_decl :=
+  | SAFE_KW ; ROLE_KW ; nm = name ; { Safe nm }
+  | ROLE_KW ; nm = name ; { Unsafe nm }
 
 let new_role_decls == SEMICOLON ; NEW_KW ;
-                      nms = separated_nonempty_list(COMMA, role_decl) ; { nms }
+                      nms0 = separated_nonempty_list(COMMA, role_decl) ; {
+                        let strip = function
+                          | Safe x -> x
+                          | Unsafe x -> x
+                        in
+                        let nms = List.map strip nms0 in
+                        nms 
+                        }
 
 
 let global_protocol_body ==
@@ -344,6 +366,8 @@ let raw_qname ==
   names = separated_nonempty_list(DOT, IDENT); { String.concat "." names }
 
 let name == create(raw_name)
+
+let safename == create(raw_name)
 
 let raw_name ==
   | i = IDENT ; { i }

@@ -32,6 +32,7 @@ type user_error =
   | UnknownVariableValue of RoleName.t * VariableName.t
   | UnsatisfiableRefinement (* TODO: Extra Message for error reporting *)
   | StuckRefinement (* TODO: Extra Message for error reporting *)
+  | NoCrashBranchForUnsafeRole of RoleName.t
 [@@deriving sexp_of]
 
 (** UserError is a user error and should be reported back so it can be fixed *)
@@ -116,6 +117,8 @@ let show_user_error = function
         (RoleName.user role) (VariableName.user var)
   | UnsatisfiableRefinement -> "Refinements cannot be satisfied"
   | StuckRefinement -> "Protocol may be stuck due to refinements"
+  | NoCrashBranchForUnsafeRole role ->
+    Printf.sprintf "No Crash Branch found for unsafe role %s, please either add one, or designate the roles as safe in the protocol arguments." (RoleName.show role)
 
 (** A Violation is reported when an impossible state was reached. It has to
     be considered a bug even when the fix is to change the Violation to a
