@@ -19,6 +19,7 @@ curl -o z3.zip -L https://github.com/Z3Prover/z3/releases/download/z3-4.8.12/${Z
 unzip z3.zip
 rm z3.zip
 mv ${Z3_FILENAME} z3
-mv z3/bin/* /usr/local/bin
-mv z3/include/* /usr/local/include
+sudo mv z3/bin/* /usr/local/bin
+sudo mv z3/include/* /usr/local/include
+rm -rf z3
 
