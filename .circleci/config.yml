@@ -31,7 +31,7 @@ jobs:
           name: Install dependencies
           command: |
             opam install -dt . --deps-only
-            opam install z3
+            ./utils/install-z3.sh
 
       - run:
           name: Build
