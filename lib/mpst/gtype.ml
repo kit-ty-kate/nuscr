@@ -396,7 +396,7 @@ let normalise_global_t (global_t : global_t) =
     ~f:normalise_protocol global_t
 
 let rec ensure_crash_branches (n : RoleName.t) = function
-  | MessageG (_l, s, _r, k) ->
+  | MessageG (l, s, _r, k) ->
     if RoleName.equal s n && not (String.equal (LabelName.user l.label) "crash") then
       uerr (NoCrashBranchForUnsafeRole s)
     else
