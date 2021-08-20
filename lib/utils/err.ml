@@ -62,7 +62,7 @@ let show_user_error = function
   | ReflexiveMessage r ->
       "Reflexive message of Role " ^ RoleName.user r ^ " at " ^ Loc.show
       @@ RoleName.where r
-  | UnableToMerge s -> "Unable to merge: " ^ s
+  | UnableToMerge s -> "Unable to merge: \n" ^ s
   | RedefinedProtocol (name, interval1, interval2) ->
       "Redefined protocol " ^ ProtocolName.user name ^ " at "
       ^ Loc.show interval1 ^ " and " ^ Loc.show interval2
