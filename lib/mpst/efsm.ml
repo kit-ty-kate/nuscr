@@ -248,7 +248,7 @@ let of_local_type_with_rec_var_info lty =
     if Pragma.refinement_type_enabled () then
       let silent_vars = env.silent_var_buffer in
       let rec_expr_updates =
-        match next with TVarL (_, rec_exprs) -> rec_exprs | _ -> []
+        match next with TVarL (_, rec_exprs, _) -> rec_exprs | _ -> []
       in
       ({env with silent_var_buffer= []}, {silent_vars; rec_expr_updates})
     else (env, {silent_vars= []; rec_expr_updates= []})
@@ -301,7 +301,7 @@ let of_local_type_with_rec_var_info lty =
         let g = G.add_edge_e g (new_st, Epsilon, curr) in
         let states_to_merge = (new_st, curr) :: env.states_to_merge in
         ({env with g; states_to_merge}, curr)
-    | TVarL (tv, _) ->
+    | TVarL (tv, _, _) ->
         (env, List.Assoc.find_exn ~equal:TypeVariableName.equal env.tyvars tv)
     | AcceptL _ | InviteCreateL _ ->
         Err.violation "Nested protocols are not supported in efsm"
