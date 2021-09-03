@@ -5,6 +5,26 @@ open Err
 open Names
 open Syntaxtree
 
+type lazy_raw =
+  | LazyRecvL of Gtype.message * RoleName.t * lazy_t
+  | LazySendL of Gtype.message * RoleName.t * lazy_t
+  | LazyChoiceL of RoleName.t * lazy_t list
+  | LazyTVarL of TypeVariableName.t * Expr.t list * lazy_t
+  | LazyMuL of TypeVariableName.t * (bool * Gtype.rec_var) list * lazy_t
+  | LazyEndL
+  | LazyInviteCreateL of
+      RoleName.t list * RoleName.t list * ProtocolName.t * lazy_t
+  | LazyAcceptL of
+      RoleName.t
+      * ProtocolName.t
+      * RoleName.t list
+      * RoleName.t list
+      * RoleName.t
+      * lazy_t
+  | LazySilentL of VariableName.t * Expr.payload_type * lazy_t
+
+and lazy_t = lazy_raw Lazy.t
+
 type t =
   | RecvL of Gtype.message * RoleName.t * t
   | SendL of Gtype.message * RoleName.t * t
@@ -22,6 +42,21 @@ type t =
       * t
   | SilentL of VariableName.t * Expr.payload_type * t
 [@@deriving sexp_of]
+
+let rec of_lazy_t (lazy_lt : lazy_t) : t =
+  match lazy_lt with
+  | (lazy (LazyRecvL (g, r, lt'))) -> RecvL (g, r, of_lazy_t lt')
+  | (lazy (LazySendL (g, r, lt'))) -> SendL (g, r, of_lazy_t lt')
+  | (lazy (LazyChoiceL (r, lts))) -> ChoiceL (r, List.map ~f:of_lazy_t lts)
+  | (lazy (LazyTVarL (tv, es, lt_rec))) ->
+      TVarL (tv, es, lazy (of_lazy_t lt_rec))
+  | (lazy (LazyMuL (tv, rvs, lt'))) -> MuL (tv, rvs, of_lazy_t lt')
+  | (lazy LazyEndL) -> EndL
+  | (lazy (LazyInviteCreateL (rs, rs', p, lt'))) ->
+      InviteCreateL (rs, rs', p, of_lazy_t lt')
+  | (lazy (LazyAcceptL (r, p, rs, rs', r', lt'))) ->
+      AcceptL (r, p, rs, rs', r', of_lazy_t lt')
+  | (lazy (LazySilentL (v, ty, lt'))) -> SilentL (v, ty, of_lazy_t lt')
 
 module LocalProtocolId = struct
   module T = struct
@@ -45,53 +80,56 @@ let roles_to_string roles =
   let str_roles = List.map ~f:RoleName.user roles in
   String.concat ~sep:", " str_roles
 
-let rec equal lty1 lty2 =
+let rec equal_lazy_t lty1 lty2 =
   match (lty1, lty2) with
-  | RecvL (m1, r1, lty1'), RecvL (m2, r2, lty2') ->
-      [%derive.eq: Gtype.message * RoleName.t * t] (m1, r1, lty1')
+  | (lazy (LazyRecvL (m1, r1, lty1'))), (lazy (LazyRecvL (m2, r2, lty2'))) ->
+      [%derive.eq: Gtype.message * RoleName.t * lazy_t] (m1, r1, lty1')
         (m2, r2, lty2')
-  | SendL (m1, r1, lty1'), SendL (m2, r2, lty2') ->
-      [%derive.eq: Gtype.message * RoleName.t * t] (m1, r1, lty1')
+  | (lazy (LazySendL (m1, r1, lty1'))), (lazy (LazySendL (m2, r2, lty2'))) ->
+      [%derive.eq: Gtype.message * RoleName.t * lazy_t] (m1, r1, lty1')
         (m2, r2, lty2')
-  | ChoiceL (r1, ltys1), ChoiceL (r2, ltys2) ->
-      [%derive.eq: RoleName.t * t list] (r1, ltys1) (r2, ltys2)
-  | TVarL (tv1, es1, _), TVarL (tv2, es2, _) ->
+  | (lazy (LazyChoiceL (r1, ltys1))), (lazy (LazyChoiceL (r2, ltys2))) ->
+      [%derive.eq: RoleName.t * lazy_t list] (r1, ltys1) (r2, ltys2)
+  | (lazy (LazyTVarL (tv1, es1, _))), (lazy (LazyTVarL (tv2, es2, _))) ->
       (* Do NOT inspect the lazy continuation *)
       [%derive.eq: TypeVariableName.t * Expr.t list] (tv1, es1) (tv2, es2)
-  | MuL (tv1, rvs1, lty1'), MuL (tv2, rvs2, lty2') ->
-      [%derive.eq: TypeVariableName.t * (bool * Gtype.rec_var) list * t]
-        (tv1, rvs1, lty1') (tv2, rvs2, lty2')
-  | EndL, EndL -> true
-  | InviteCreateL (rs1, rs1', p1, lty1'), InviteCreateL (rs2, rs2', p2, lty2')
+  | (lazy (LazyMuL (tv1, rvs1, lty1'))), (lazy (LazyMuL (tv2, rvs2, lty2')))
     ->
-      [%derive.eq: RoleName.t list * RoleName.t list * ProtocolName.t * t]
+      [%derive.eq: TypeVariableName.t * (bool * Gtype.rec_var) list * lazy_t]
+        (tv1, rvs1, lty1') (tv2, rvs2, lty2')
+  | (lazy LazyEndL), (lazy LazyEndL) -> true
+  | ( (lazy (LazyInviteCreateL (rs1, rs1', p1, lty1')))
+    , (lazy (LazyInviteCreateL (rs2, rs2', p2, lty2'))) ) ->
+      [%derive.eq:
+        RoleName.t list * RoleName.t list * ProtocolName.t * lazy_t]
         (rs1, rs1', p1, lty1') (rs2, rs2', p2, lty2')
-  | ( AcceptL (r1, p1, rs1, rs1', r1', lty1')
-    , AcceptL (r2, p2, rs2, rs2', r2', lty2') ) ->
+  | ( (lazy (LazyAcceptL (r1, p1, rs1, rs1', r1', lty1')))
+    , (lazy (LazyAcceptL (r2, p2, rs2, rs2', r2', lty2'))) ) ->
       [%derive.eq:
         RoleName.t
         * ProtocolName.t
         * RoleName.t list
         * RoleName.t list
         * RoleName.t
-        * t]
+        * lazy_t]
         (r1, p1, rs1, rs1', r1', lty1')
         (r2, p2, rs2, rs2', r2', lty2')
-  | SilentL (v1, t1, lty1'), SilentL (v2, t2, lty2') ->
-      [%derive.eq: VariableName.t * Expr.payload_type * t] (v1, t1, lty1')
-        (v2, t2, lty2')
+  | (lazy (LazySilentL (v1, t1, lty1'))), (lazy (LazySilentL (v2, t2, lty2')))
+    ->
+      [%derive.eq: VariableName.t * Expr.payload_type * lazy_t]
+        (v1, t1, lty1') (v2, t2, lty2')
   (* Enumerate constructors here, so that new additions to local types will
    * raise a partial pattern matching warning. Otherwise, simply use a
    * catch-all clause may cause future breakage *)
-  | RecvL _, _ -> false
-  | SendL _, _ -> false
-  | ChoiceL _, _ -> false
-  | TVarL _, _ -> false
-  | MuL _, _ -> false
-  | EndL, _ -> false
-  | InviteCreateL _, _ -> false
-  | AcceptL _, _ -> false
-  | SilentL _, _ -> false
+  | (lazy (LazyRecvL _)), _ -> false
+  | (lazy (LazySendL _)), _ -> false
+  | (lazy (LazyChoiceL _)), _ -> false
+  | (lazy (LazyTVarL _)), _ -> false
+  | (lazy (LazyMuL _)), _ -> false
+  | (lazy LazyEndL), _ -> false
+  | (lazy (LazyInviteCreateL _)), _ -> false
+  | (lazy (LazyAcceptL _)), _ -> false
+  | (lazy (LazySilentL _)), _ -> false
 
 let show =
   let indent_here indent = String.make (indent * 2) ' ' in
@@ -239,37 +277,40 @@ let show_lookup_table table =
 
 exception Unmergable of t * t [@@deriving sexp_of]
 
-let rec merge projected_role lty1 lty2 =
+let rec lazy_merge projected_role (lty1 : lazy_t) (lty2 : lazy_t) : lazy_t =
   try
-    let fail () = raise (Unmergable (lty1, lty2)) in
-    let merge_recv r recvs =
-      let rec aux (acc : (LabelName.t * t) list) = function
-        | RecvL (m, _, lty) as l -> (
+    let fail () = raise (Unmergable (of_lazy_t lty1, of_lazy_t lty2)) in
+    let merge_recv r recvs : lazy_t =
+      let rec aux (acc : (LabelName.t * lazy_t) list) = function
+        | (lazy (LazyRecvL (m, _, lty))) as l -> (
             let {label; _} = m in
             match List.Assoc.find acc ~equal:LabelName.equal label with
             | None -> (label, l) :: acc
-            | Some (RecvL (m_, r, l_))
+            | Some (lazy (LazyRecvL (m_, r, l_)))
               when List.equal equal_payload m.Gtype.payload m_.Gtype.payload
               ->
                 List.Assoc.add acc ~equal:LabelName.equal label
-                  (RecvL (m, r, merge projected_role lty l_))
-            | Some (RecvL _) -> fail ()
+                  (lazy (LazyRecvL (m, r, lazy_merge projected_role lty l_)))
+            | Some (lazy (LazyRecvL _)) -> fail ()
             | _ ->
                 violation "Merge receive must be merging receive local types"
             )
-        | AcceptL (role', protocol, roles, new_roles, caller, lty) as l -> (
+        | (lazy
+            (LazyAcceptL (role', protocol, roles, new_roles, caller, lty)) )
+          as l -> (
             let label = call_label caller protocol roles in
             match List.Assoc.find acc ~equal:LabelName.equal label with
             | None -> (label, l) :: acc
-            | Some (AcceptL (_, _, _, _, _, lty_)) ->
+            | Some (lazy (LazyAcceptL (_, _, _, _, _, lty_))) ->
                 List.Assoc.add acc ~equal:LabelName.equal label
-                  (AcceptL
-                     ( role'
-                     , protocol
-                     , roles
-                     , new_roles
-                     , caller
-                     , merge projected_role lty lty_ ) )
+                  ( lazy
+                    (LazyAcceptL
+                       ( role'
+                       , protocol
+                       , roles
+                       , new_roles
+                       , caller
+                       , lazy_merge projected_role lty lty_ ) ) )
             | _ ->
                 violation "Merge receive must be merging receive local types"
             )
@@ -277,48 +318,56 @@ let rec merge projected_role lty1 lty2 =
       in
       let conts = List.fold ~f:aux ~init:[] recvs in
       match conts with
-      | [] -> EndL
+      | [] -> lazy LazyEndL
       | [(_, lty)] -> lty
-      | conts -> ChoiceL (r, List.map ~f:snd conts)
+      | conts -> lazy (LazyChoiceL (r, List.map ~f:snd conts))
     in
     match (lty1, lty2) with
-    | RecvL (_, r1, _), RecvL (_, r2, _) ->
+    | (lazy (LazyRecvL (_, r1, _))), (lazy (LazyRecvL (_, r2, _))) ->
         if not @@ RoleName.equal r1 r2 then fail () ;
         merge_recv r1 [lty1; lty2]
-    | AcceptL (_, _, _, _, caller, _), RecvL (_, r2, _) ->
+    | ( (lazy (LazyAcceptL (_, _, _, _, caller, _)))
+      , (lazy (LazyRecvL (_, r2, _))) ) ->
         if not @@ RoleName.equal caller r2 then fail () ;
         merge_recv r2 [lty1; lty2]
-    | RecvL (_, r1, _), AcceptL (_, _, _, _, caller, _) ->
+    | ( (lazy (LazyRecvL (_, r1, _)))
+      , (lazy (LazyAcceptL (_, _, _, _, caller, _))) ) ->
         if not @@ RoleName.equal caller r1 then fail () ;
         merge_recv r1 [lty1; lty2]
-    | ChoiceL (r1, ltys1), RecvL (_, r2, _) when RoleName.equal r1 r2 ->
+    | (lazy (LazyChoiceL (r1, ltys1))), (lazy (LazyRecvL (_, r2, _)))
+      when RoleName.equal r1 r2 ->
         (* Choice is a set of receive *)
         merge_recv r1 (lty2 :: ltys1)
-    | RecvL (_, r2, _), ChoiceL (r1, ltys2) when RoleName.equal r1 r2 ->
+    | (lazy (LazyRecvL (_, r2, _))), (lazy (LazyChoiceL (r1, ltys2)))
+      when RoleName.equal r1 r2 ->
         merge_recv r1 (lty1 :: ltys2)
-    | ChoiceL (r1, ltys1), ChoiceL (r2, ltys2)
+    | (lazy (LazyChoiceL (r1, ltys1))), (lazy (LazyChoiceL (r2, ltys2)))
       when RoleName.equal r1 r2 && not (RoleName.equal r1 projected_role) ->
         merge_recv r1 (ltys1 @ ltys2)
-    | AcceptL (_, _, _, _, caller1, _), AcceptL (_, _, _, _, caller2, _) ->
+    | ( (lazy (LazyAcceptL (_, _, _, _, caller1, _)))
+      , (lazy (LazyAcceptL (_, _, _, _, caller2, _))) ) ->
         if not @@ RoleName.equal caller1 caller2 then fail () ;
         merge_recv caller1 [lty1; lty2]
-    | ChoiceL (r1, ltys1), AcceptL (_, _, _, _, caller, _)
+    | ( (lazy (LazyChoiceL (r1, ltys1)))
+      , (lazy (LazyAcceptL (_, _, _, _, caller, _))) )
       when RoleName.equal r1 caller && not (RoleName.equal r1 projected_role)
       ->
         merge_recv r1 (lty2 :: ltys1)
-    | AcceptL (_, _, _, _, caller, _), ChoiceL (r2, ltys2)
+    | ( (lazy (LazyAcceptL (_, _, _, _, caller, _)))
+      , (lazy (LazyChoiceL (r2, ltys2))) )
       when RoleName.equal r2 caller && not (RoleName.equal r2 projected_role)
       ->
         merge_recv r2 (lty1 :: ltys2)
-    | (TVarL (tv1, es1, _) as lty1), TVarL (tv2, es2, _)
+    | ( ((lazy (LazyTVarL (tv1, es1, _))) as lty1)
+      , (lazy (LazyTVarL (tv2, es2, _))) )
       when [%derive.eq: TypeVariableName.t * Expr.t list] (tv1, es1)
              (tv2, es2) ->
         lty1
-    | TVarL (_, _, l_lazy), lty2 when Lazy.is_val l_lazy ->
-        merge projected_role (Lazy.force l_lazy) lty2
-    | lty1, TVarL (_, _, l_lazy) when Lazy.is_val l_lazy ->
-        merge projected_role lty1 (Lazy.force l_lazy)
-    | _ -> if equal lty1 lty2 then lty1 else fail ()
+    | (lazy (LazyTVarL (_, _, l_lazy))), lty2 when Lazy.is_val l_lazy ->
+        lazy_merge projected_role l_lazy lty2
+    | lty1, (lazy (LazyTVarL (_, _, l_lazy))) when Lazy.is_val l_lazy ->
+        lazy_merge projected_role lty1 l_lazy
+    | _ -> if equal_lazy_t lty1 lty2 then lty1 else fail ()
   with Unmergable (l1, l2) ->
     let error = show l1 ^ "\nand\n\n" ^ show l2 in
     uerr @@ Err.UnableToMerge error
@@ -368,7 +417,7 @@ type project_env =
   ; silent_vars: Set.M(VariableName).t
         (* Info for silent variables (refinement types ) *)
   ; unguarded_tv: Set.M(TypeVariableName).t (* Unguarded type variables *)
-  ; lazy_conts: t Lazy.t Map.M(TypeVariableName).t }
+  ; lazy_conts: lazy_t Map.M(TypeVariableName).t }
 
 let new_project_env =
   { penv= Map.empty (module ProtocolName)
@@ -377,7 +426,7 @@ let new_project_env =
   ; unguarded_tv= Set.empty (module TypeVariableName)
   ; lazy_conts= Map.empty (module TypeVariableName) }
 
-let rec project' env (projected_role : RoleName.t) =
+let rec lazy_project env (projected_role : RoleName.t) g : lazy_t =
   let check_expr silent_vars e =
     let free_vars = Expr.free_var e in
     let unknown_vars = Set.inter free_vars silent_vars in
@@ -385,181 +434,203 @@ let rec project' env (projected_role : RoleName.t) =
       uerr
         (UnknownVariableValue (projected_role, Set.choose_exn unknown_vars))
   in
-  function
-  | EndG -> EndL
+  match g with
+  | EndG -> lazy LazyEndL
   | TVarG (name, _, _) when Set.mem env.unguarded_tv name ->
       (* Type variable unguarded *)
-      EndL
+      lazy LazyEndL
   | TVarG (name, rec_exprs, _) ->
-      let {rvenv; silent_vars; lazy_conts; _} = env in
-      let rec_expr_filter = Map.find_exn rvenv name in
-      let rec_exprs =
-        List.map2_exn
-          ~f:(fun (x, _) y -> if not x then Some y else None)
-          rec_expr_filter rec_exprs
-      in
-      let rec_exprs = List.filter_opt rec_exprs in
-      List.iter ~f:(check_expr silent_vars) rec_exprs ;
-      TVarL (name, rec_exprs, Map.find_exn lazy_conts name)
-  | MuG (name, rec_exprs, g_type) -> (
-      let rec_exprs =
-        List.map
-          ~f:(fun ({rv_roles; _} as rec_expr) ->
-            ( not @@ List.mem ~equal:RoleName.equal rv_roles projected_role
-            , rec_expr ) )
-          rec_exprs
-      in
-      let {rvenv; silent_vars; unguarded_tv; lazy_conts; _} = env in
-      let silent_vars =
-        List.fold ~init:silent_vars
-          ~f:(fun acc (is_silent, {rv_name; _}) ->
-            if is_silent then Set.add acc rv_name else acc )
-          rec_exprs
-      in
-      let rvenv =
-        match Map.add ~key:name ~data:rec_exprs rvenv with
-        | `Ok rvenv -> rvenv
-        | `Duplicate -> rvenv
-      in
-      let unguarded_tv = Set.add unguarded_tv name in
-      let env = {env with rvenv; silent_vars; unguarded_tv} in
-      let rec lazy_cont =
-        lazy
-          (project'
+      lazy
+        (let {rvenv; silent_vars; lazy_conts; _} = env in
+         let rec_expr_filter = Map.find_exn rvenv name in
+         let rec_exprs =
+           List.map2_exn
+             ~f:(fun (x, _) y -> if not x then Some y else None)
+             rec_expr_filter rec_exprs
+         in
+         let rec_exprs = List.filter_opt rec_exprs in
+         List.iter ~f:(check_expr silent_vars) rec_exprs ;
+         LazyTVarL (name, rec_exprs, Map.find_exn lazy_conts name) )
+  | MuG (name, rec_exprs, g_type) ->
+      lazy
+        (let rec_exprs =
+           List.map
+             ~f:(fun ({rv_roles; _} as rec_expr) ->
+               ( not @@ List.mem ~equal:RoleName.equal rv_roles projected_role
+               , rec_expr ) )
+             rec_exprs
+         in
+         let {rvenv; silent_vars; unguarded_tv; lazy_conts; _} = env in
+         let silent_vars =
+           List.fold ~init:silent_vars
+             ~f:(fun acc (is_silent, {rv_name; _}) ->
+               if is_silent then Set.add acc rv_name else acc )
+             rec_exprs
+         in
+         let rvenv =
+           match Map.add ~key:name ~data:rec_exprs rvenv with
+           | `Ok rvenv -> rvenv
+           | `Duplicate -> rvenv
+         in
+         let unguarded_tv = Set.add unguarded_tv name in
+         let env = {env with rvenv; silent_vars; unguarded_tv} in
+         let rec lazy_cont () =
+           lazy_project
              { env with
-               lazy_conts= Map.add_exn ~key:name ~data:lazy_cont lazy_conts
-             }
-             projected_role g_type )
-      in
-      let cont = Lazy.force lazy_cont in
-      match cont with
-      | TVarL _ | EndL -> EndL
-      | l_type -> MuL (name, rec_exprs, l_type) )
-  | MessageG (m, send_r, recv_r, g_type) -> (
-      let next env = project' env projected_role g_type in
-      match projected_role with
-      (* When projected role is involved in an interaction, reset unguarded_tv
-       * *)
-      | _ when RoleName.equal projected_role send_r ->
-          SendL
-            ( m
-            , recv_r
-            , next
-                {env with unguarded_tv= Set.empty (module TypeVariableName)}
-            )
-      | _ when RoleName.equal projected_role recv_r ->
-          RecvL
-            ( m
-            , send_r
-            , next
-                {env with unguarded_tv= Set.empty (module TypeVariableName)}
-            )
-      (* When projected role is not involved in an interaction, do not reset
-       * unguarded_tv *)
-      | _ ->
-          let named_payloads =
-            List.rev_filter_map
-              ~f:(function
-                | PValue (Some var, t) -> Some (var, t) | _ -> None )
-              m.payload
-          in
-          if
-            List.is_empty named_payloads
-            || (not @@ Pragma.refinement_type_enabled ())
-          then next env
-          else
-            let {silent_vars; _} = env in
-            let silent_vars =
-              List.fold ~init:silent_vars
-                ~f:(fun acc (var, _) -> Set.add acc var)
-                named_payloads
-            in
-            let env = {env with silent_vars} in
-            List.fold ~init:(next env)
-              ~f:(fun acc (var, t) -> SilentL (var, t, acc))
-              named_payloads )
-  | ChoiceG (choice_r, g_types) -> (
-      let check_distinct_prefix gtys =
-        let rec aux acc = function
-          | [] -> ()
-          | MessageG (m, _, _, _) :: rest ->
-              let l = m.label in
-              if Set.mem acc l (* FIXME: Use 2 labels for location *) then
-                uerr (DuplicateLabel l)
-              else aux (Set.add acc l) rest
-          | CallG (caller, protocol, roles, _) :: rest ->
-              let l = call_label caller protocol roles in
-              if Set.mem acc l then uerr (DuplicateLabel l)
-              else aux (Set.add acc l) rest
-          | ChoiceG (_, gs) :: rest -> aux acc (gs @ rest)
-          | MuG (_, _, g) :: rest -> aux acc (g :: rest)
-          | TVarG (_, _, g) :: rest -> aux acc (Lazy.force g :: rest)
-          | _ ->
-              violation
-                "Normalised global type always has a message in choice \
-                 branches"
-        in
-        aux (Set.empty (module LabelName)) gtys
-      in
-      check_distinct_prefix g_types ;
-      let possible_roles =
-        List.fold
-          ~f:(check_consistent_gchoice choice_r)
-          ~init:(Set.empty (module RoleName))
-          g_types
-      in
-      let recv_r = Set.choose_exn possible_roles in
-      let l_types = List.map ~f:(project' env projected_role) g_types in
-      match projected_role with
-      | _
-        when RoleName.equal projected_role choice_r
-             || RoleName.equal projected_role recv_r -> (
-        match l_types with
-        | [ltype] -> ltype
-        | _ -> ChoiceL (choice_r, l_types) )
-      | _ -> (
-        match List.reduce ~f:(merge projected_role) l_types with
-        | Some l -> l
-        | None -> EndL ) )
-  | CallG (caller, protocol, roles, g_type) -> (
-      (* Reset unguarded_tv *)
-      let next =
-        project'
-          {env with unguarded_tv= Set.empty (module TypeVariableName)}
-          projected_role g_type
-      in
-      let {penv; _} = env in
-      let {static_roles; dynamic_roles; _} = Map.find_exn penv protocol in
-      let gen_acceptl next =
-        let role_elem =
-          List.findi roles ~f:(fun _ r' -> RoleName.equal projected_role r')
-        in
-        let idx, _ = Option.value_exn role_elem in
-        let role_in_proto = List.nth_exn static_roles idx in
-        AcceptL (role_in_proto, protocol, roles, dynamic_roles, caller, next)
-      in
-      let gen_invitecreatel next =
-        InviteCreateL (roles, dynamic_roles, protocol, next)
-      in
-      let is_caller = RoleName.equal caller projected_role in
-      let is_participant =
-        List.mem roles projected_role ~equal:RoleName.equal
-      in
-      match projected_role with
-      | _ when is_caller && is_participant ->
-          let acceptl = gen_acceptl next in
-          gen_invitecreatel acceptl
-      | _ when is_caller -> gen_invitecreatel next
-      | _ when is_participant -> gen_acceptl next
-      | _ -> next )
+               lazy_conts=
+                 Map.add_exn ~key:name ~data:(lazy_cont ()) lazy_conts }
+             projected_role g_type
+         in
+         match lazy_cont () with
+         | (lazy (LazyTVarL _ | LazyEndL)) -> LazyEndL
+         | l_type -> LazyMuL (name, rec_exprs, l_type) )
+  | MessageG (m, send_r, recv_r, g_type) ->
+      lazy
+        (let next env = lazy_project env projected_role g_type in
+         match projected_role with
+         (* When projected role is involved in an interaction, reset unguarded_tv
+          * *)
+         | _ when RoleName.equal projected_role send_r ->
+             LazySendL
+               ( m
+               , recv_r
+               , next
+                   { env with
+                     unguarded_tv= Set.empty (module TypeVariableName) } )
+         | _ when RoleName.equal projected_role recv_r ->
+             LazyRecvL
+               ( m
+               , send_r
+               , next
+                   { env with
+                     unguarded_tv= Set.empty (module TypeVariableName) } )
+         (* When projected role is not involved in an interaction, do not reset
+          * unguarded_tv *)
+         | _ ->
+             let named_payloads =
+               List.rev_filter_map
+                 ~f:(function
+                   | PValue (Some var, t) -> Some (var, t) | _ -> None )
+                 m.payload
+             in
+             if
+               List.is_empty named_payloads
+               || (not @@ Pragma.refinement_type_enabled ())
+             then
+               let l = match next env with (lazy l) -> l in
+               l
+             else
+               let {silent_vars; _} = env in
+               let silent_vars =
+                 List.fold ~init:silent_vars
+                   ~f:(fun acc (var, _) -> Set.add acc var)
+                   named_payloads
+               in
+               let env = {env with silent_vars} in
+               let l = match next env with (lazy l) -> l in
+               List.fold ~init:l
+                 ~f:(fun acc (var, t) -> LazySilentL (var, t, lazy acc))
+                 named_payloads )
+  | ChoiceG (choice_r, g_types) ->
+      lazy
+        (let check_distinct_prefix gtys =
+           let rec aux acc = function
+             | [] -> ()
+             | MessageG (m, _, _, _) :: rest ->
+                 let l = m.label in
+                 if Set.mem acc l (* FIXME: Use 2 labels for location *) then
+                   uerr (DuplicateLabel l)
+                 else aux (Set.add acc l) rest
+             | CallG (caller, protocol, roles, _) :: rest ->
+                 let l = call_label caller protocol roles in
+                 if Set.mem acc l then uerr (DuplicateLabel l)
+                 else aux (Set.add acc l) rest
+             | ChoiceG (_, gs) :: rest -> aux acc (gs @ rest)
+             | MuG (_, _, g) :: rest -> aux acc (g :: rest)
+             | TVarG (_, _, g) :: rest -> aux acc (Lazy.force g :: rest)
+             | _ ->
+                 violation
+                   "Normalised global type always has a message in choice \
+                    branches"
+           in
+           aux (Set.empty (module LabelName)) gtys
+         in
+         check_distinct_prefix g_types ;
+         let possible_roles =
+           List.fold
+             ~f:(check_consistent_gchoice choice_r)
+             ~init:(Set.empty (module RoleName))
+             g_types
+         in
+         let recv_r = Set.choose_exn possible_roles in
+         let l_types =
+           List.map ~f:(lazy_project env projected_role) g_types
+         in
+         match projected_role with
+         | _
+           when RoleName.equal projected_role choice_r
+                || RoleName.equal projected_role recv_r -> (
+           match l_types with
+           | [(lazy ltype)] -> ltype
+           | _ -> LazyChoiceL (choice_r, l_types) )
+         | _ -> (
+           match List.reduce ~f:(lazy_merge projected_role) l_types with
+           | Some (lazy l) -> l
+           | None -> LazyEndL ) )
+  | CallG (caller, protocol, roles, g_type) ->
+      lazy
+        ((* Reset unguarded_tv *)
+         let next =
+           match
+             lazy_project
+               {env with unguarded_tv= Set.empty (module TypeVariableName)}
+               projected_role g_type
+           with
+           | (lazy l) -> l
+         in
+         let {penv; _} = env in
+         let {static_roles; dynamic_roles; _} = Map.find_exn penv protocol in
+         let gen_acceptl (next : lazy_raw) : lazy_raw =
+           let role_elem =
+             List.findi roles ~f:(fun _ r' ->
+                 RoleName.equal projected_role r' )
+           in
+           let idx, _ = Option.value_exn role_elem in
+           let role_in_proto = List.nth_exn static_roles idx in
+           LazyAcceptL
+             ( role_in_proto
+             , protocol
+             , roles
+             , dynamic_roles
+             , caller
+             , lazy next )
+         in
+         let gen_invitecreatel (next : lazy_raw) : lazy_raw =
+           LazyInviteCreateL (roles, dynamic_roles, protocol, lazy next)
+         in
+         let is_caller = RoleName.equal caller projected_role in
+         let is_participant =
+           List.mem roles projected_role ~equal:RoleName.equal
+         in
+         match projected_role with
+         | _ when is_caller && is_participant ->
+             let acceptl = gen_acceptl next in
+             gen_invitecreatel acceptl
+         | _ when is_caller -> gen_invitecreatel next
+         | _ when is_participant -> gen_acceptl next
+         | _ -> next )
 
-let project projected_role g = project' new_project_env projected_role g
+let project projected_role g =
+  of_lazy_t (lazy_project new_project_env projected_role g)
 
 let project_nested_t (nested_t : Gtype.nested_t) =
   let project_role protocol_name all_roles gtype local_protocols
       projected_role =
     let ltype =
-      project' {new_project_env with penv= nested_t} projected_role gtype
+      of_lazy_t
+        (lazy_project
+           {new_project_env with penv= nested_t}
+           projected_role gtype )
     in
     (* TODO: Fix make unique tvars *)
     Map.add_exn local_protocols
